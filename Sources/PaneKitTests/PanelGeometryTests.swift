@@ -434,5 +434,19 @@ func runPaneWidthTests() {
             )
             Check.equal(restored.width, PanelGeometry.maximumWidth)
         }
+
+        Check.test("a new window cascades one step right and down") {
+            let source = CGRect(x: 100, y: 400, width: 460, height: 300)
+            let next = PanelGeometry.cascade(from: source, within: builtIn)
+            Check.equal(next.origin, CGPoint(x: 128, y: 372))
+            Check.equal(next.size, source.size)
+        }
+
+        Check.test("a cascade that would leave the display wraps to its top-left") {
+            let source = CGRect(
+                x: builtIn.maxX - 470, y: builtIn.minY + 10, width: 460, height: 300)
+            let next = PanelGeometry.cascade(from: source, within: builtIn)
+            Check.expect(builtIn.contains(next))
+        }
     }
 }

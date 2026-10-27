@@ -252,6 +252,19 @@ public enum PanelGeometry {
 
     // MARK: - Remembering, per display
 
+    /// How far each new window steps from the one it came from — the standard cascade distance.
+    public static let cascadeStep: CGFloat = 28
+
+    /// Where a new window goes: one step right and down from `source`, so both title bars stay
+    /// grabbable. A step that would leave the visible frame wraps back to its top-left corner rather
+    /// than walking off the display.
+    public static func cascade(from source: CGRect, within visible: CGRect) -> CGRect {
+        var frame = source.offsetBy(dx: cascadeStep, dy: -cascadeStep)
+        if frame.maxX > visible.maxX { frame.origin.x = visible.minX + cascadeStep }
+        if frame.minY < visible.minY { frame.origin.y = visible.maxY - frame.height - cascadeStep }
+        return frame
+    }
+
     /// The key a pane's remembered frame is filed under.
     ///
     /// **`uuid` must be the display's persistent UUID, never its `CGDirectDisplayID`.** The ID was

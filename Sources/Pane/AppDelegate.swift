@@ -37,10 +37,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         vault = VaultService(vault: settings.value.vaultURL)
         currentVaultURL = settings.value.vaultURL
         pane = PaneController(vault: vault, state: state, settings: settings)
-        pane.onPinsChanged = { [weak self] in self?.refreshMenuBar() }
-        pane.onVaultMissing = { [weak self] in self?.handleVaultMissing() }
-        pane.onOpenSettings = { [weak self] in self?.openSettingsWindow() }
-        pane.onSummoned = { [weak self] in self?.checkForUpdateIfDue() }
+        wire(pane)
+        restoreWindows()
 
         installMenuBarItem()
         installHotkey()
@@ -112,11 +110,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // when the vault path changes is written against the *new* folder under the old note's
             // name, or not at all. Safe rather than a race for the same reason: vault I/O is one
             // serial queue, so this write runs with the old location before `setVault` changes it.
-            pane?.flush(trigger: .noteSwitched)
+            for pane in allPanes { pane.flush(trigger: .noteSwitched) }
             currentVaultURL = new.vaultURL
             vault?.setVault(new.vaultURL)
             startWatching()
-            pane?.openLastUsedNote()
+            for pane in allPanes { pane.openLastUsedNote() }
         }
 
         if hotkey?.registered != new.summonHotkey { installHotkey() }
@@ -124,7 +122,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         applyDockIcon()
         applyLaunchAtLogin()
         applyMenuBarIconVisibility()
-        pane?.applySettings()
+        for pane in allPanes { pane.applySettings() }
         settingsWindow?.settingsChanged(new)
         menuBar?.rebuild(hotkey: new.summonHotkey)
         // Shortening the retention should take effect now rather than at the next launch — the
@@ -153,7 +151,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // recreates it, and the old folder is left holding the newest text while the moved
                 // copy is stale and the pane reloads showing the stale one.
                 onWillMoveNotes: { [weak self] in
-                    self?.pane.flush(trigger: .noteSwitched)
+                    for pane in self?.allPanes ?? [] { pane.flush(trigger: .noteSwitched) }
                     self?.vault.drain()
                 },
                 onUpdateStatus: { [weak self] in self?.recordUpdateStatus($0) },
@@ -163,10 +161,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // Same as the hand-edited path above, and this is the one people actually use: the
                 // Sync radio and "Notes folder" both land here, and *Move Notes* (decision 30) moves
                 // the file the buffer is pointing at.
-                self.pane.flush(trigger: .noteSwitched)
+                for pane in self.allPanes { pane.flush(trigger: .noteSwitched) }
                 self.vault.setVault(url)
                 self.startWatching()
-                self.pane.openLastUsedNote()
+                for pane in self.allPanes { pane.openLastUsedNote() }
                 self.refreshMenuBar()
             }
         }
@@ -191,7 +189,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         // Decision 10's third immediate flush. Everything else is recoverable; unsaved text is not.
-        pane?.flush(trigger: .quitting)
+        for pane in allPanes { pane.flush(trigger: .quitting) }
         // And wait for it. Decision 10 lists quit as an immediate flush, but "immediate" only meant
         // "enqueued immediately" — see `VaultService.drain`. A draft note exists nowhere but in the
         // buffer until that write lands, which is what makes the difference load-bearing.
@@ -305,7 +303,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             vault.setVault(chosen)
             startWatching()
-            pane.openLastUsedNote()
+            for pane in allPanes { pane.openLastUsedNote() }
         }
     }
 
@@ -316,7 +314,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard !names.isEmpty else { return }
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
-                    self?.pane?.vaultChanged(filenames: names)
+                    for pane in self?.allPanes ?? [] { pane.vaultChanged(filenames: names) }
                     self?.refreshMenuBar()
                 }
             }
@@ -378,9 +376,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Summon first: the pinned section exists so a pinned note is one click away from anywhere,
         // and opening one into a pane that is still offscreen would be a click that does nothing.
         menuBar.onOpenNote = { [weak self] filename in
-            self?.pane.summon()
-            self?.pane.open(filename)
+            guard let self else { return }
+            // Already in a window: that window, not a second copy of the note in the primary.
+            if self.focusPane(showing: filename, except: nil) { return }
+            self.pane.summon()
+            self.pane.open(filename)
         }
+        menuBar.onNewWindow = { [weak self] in self?.openWindow(with: nil, from: nil) }
     }
 
     // MARK: - Updates
@@ -546,6 +548,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         browseNotesItem = fileMenu.addItem(withTitle: "Browse Notes…", action: #selector(browseNotes), keyEquivalent: "")
         browseNotesItem?.target = self
         applyMenuShortcuts()
+        // ⇧⌘N, the macOS key for a new window. Not in the Shortcuts tab: the menu is its home, and the
+        // switcher's ⇧⏎ is the other way in.
+        fileMenu.addItem(withTitle: "New Window", action: #selector(newWindow), keyEquivalent: "N").target = self
         fileMenu.addItem(.separator())
         fileMenu.addItem(withTitle: "Close Pane", action: #selector(closePane), keyEquivalent: "w").target = self
         fileItem.submenu = fileMenu
@@ -604,16 +609,99 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func newNote() {
-        pane?.summon()
-        pane?.createNote(title: "")
+        guard let pane = activePane else { return }
+        if pane.isPrimary || !pane.isVisible { pane.summon() }
+        pane.createNote(title: "")
     }
 
     @objc private func browseNotes() {
-        pane?.openSwitcher()
+        activePane?.openSwitcher()
     }
 
+    /// ⌘W closes the window the keyboard is in: the primary parks, any other window goes.
     @objc private func closePane() {
-        pane?.dismiss()
+        activePane?.dismiss()
+    }
+
+    @objc private func newWindow() {
+        openWindow(with: nil, from: activePane)
+    }
+
+    // MARK: - Windows
+
+    /// Windows beyond the primary, in the order they were opened. Each is a `WKWebView` of its own,
+    /// so none exists until the user asks for it — decision 0's memory bar is per window.
+    private var extraPanes: [PaneController] = []
+
+    /// The window that last had the keyboard — what ⌘W and the File menu act on.
+    private weak var keyPane: PaneController?
+
+    private var allPanes: [PaneController] { (pane.map { [$0] } ?? []) + extraPanes }
+
+    private var activePane: PaneController? {
+        if let keyPane, keyPane.isVisible { return keyPane }
+        return pane
+    }
+
+    private func wire(_ pane: PaneController) {
+        pane.onPinsChanged = { [weak self] in self?.refreshMenuBar() }
+        pane.onVaultMissing = { [weak self] in self?.handleVaultMissing() }
+        pane.onOpenSettings = { [weak self] in self?.openSettingsWindow() }
+        pane.onSummoned = { [weak self] in self?.checkForUpdateIfDue() }
+        pane.notesShownElsewhere = { [weak self, weak pane] in
+            Set((self?.allPanes ?? []).filter { $0 !== pane }.compactMap(\.claimedFilename))
+        }
+        pane.onOpenElsewhere = { [weak self, weak pane] filename in
+            self?.focusPane(showing: filename, except: pane) ?? false
+        }
+        pane.onOpenInNewPane = { [weak self, weak pane] filename in
+            self?.openWindow(with: filename, from: pane)
+        }
+        pane.onBecameKey = { [weak self, weak pane] in self?.keyPane = pane }
+        pane.onClosed = { [weak self, weak pane] in
+            // After the close has returned — the window is still on the stack that closed it.
+            DispatchQueue.main.async { self?.extraPanes.removeAll { $0 === pane } }
+        }
+    }
+
+    /// Brings back the windows that were open at quit, each on its own note.
+    private func restoreWindows() {
+        for saved in state.value.panes.dropFirst() {
+            let window = PaneController(
+                vault: vault, state: state, settings: settings, paneID: saved.id, isPrimary: false)
+            wire(window)
+            extraPanes.append(window)
+            window.summon()
+        }
+    }
+
+    /// True when another window already shows `filename` and has been brought forward instead.
+    @discardableResult
+    private func focusPane(showing filename: String, except: PaneController?) -> Bool {
+        guard let owner = allPanes.first(where: { $0 !== except && $0.currentFilename == filename })
+        else { return false }
+        owner.bringForward()
+        return true
+    }
+
+    /// A note — or a draft, for nil — in a window of its own, cascaded from the one it came from.
+    private func openWindow(with filename: String?, from source: PaneController?) {
+        if let filename, focusPane(showing: filename, except: nil) { return }
+        guard let vault else { return }
+
+        let window = PaneController(vault: vault, state: state, settings: settings, isPrimary: false)
+        wire(window)
+        extraPanes.append(window)
+
+        let anchor = [source].compactMap { $0 }.filter(\.isVisible).first
+            ?? allPanes.last { $0 !== window && $0.isVisible }
+        if let anchor, let screen = anchor.panel.screen {
+            window.presetFrame(
+                PanelGeometry.cascade(from: anchor.panel.frame, within: screen.visibleFrame),
+                on: screen)
+        }
+        window.startingNote = filename
+        window.summon()
     }
 
     @objc private func openSettings() {

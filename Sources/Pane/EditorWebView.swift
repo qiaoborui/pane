@@ -14,6 +14,8 @@ enum PaneMessage {
     case caret(caret: Int, scrollLine: Int)
     case requestNotes(query: String)
     case openNote(filename: String)
+    /// ⇧⏎ in the switcher: the selected note, in a window of its own.
+    case openNoteInNewPane(filename: String)
     case createNote(title: String)
     case togglePin(filename: String?)
     case deleteNote(filename: String)
@@ -85,6 +87,8 @@ enum PaneMessage {
             self = .requestNotes(query: string("query"))
         case "openNote":
             self = .openNote(filename: string("filename"))
+        case "openNoteInNewPane":
+            self = .openNoteInNewPane(filename: string("filename"))
         case "createNote":
             self = .createNote(title: string("title"))
         case "togglePin":

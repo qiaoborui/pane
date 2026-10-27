@@ -313,9 +313,16 @@ extension AppState {
     ///
     /// Reads from `notes` rather than from a dedicated "last used" field so there is one source of
     /// truth — a separate field would be a second place for the answer to be wrong.
-    public var lastUsedFilename: String? {
+    public var lastUsedFilename: String? { lastUsedFilename(excluding: []) }
+
+    /// The most recently opened note that no other window is showing.
+    ///
+    /// A second window must not start on the note the first one already holds: two buffers over one
+    /// file is two writers, and the second write would land as a conflict sibling.
+    public func lastUsedFilename(excluding shownElsewhere: Set<String>) -> String? {
         notes
             .compactMap { name, state in state.lastOpened.map { (name, $0) } }
+            .filter { !shownElsewhere.contains($0.0) }
             .max { $0.1 < $1.1 }?
             .0
     }

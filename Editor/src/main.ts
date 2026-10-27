@@ -81,6 +81,7 @@ type OutboundMessage =
   | { type: "caret"; caret: number; scrollLine: number }
   | { type: "requestNotes"; query: string }
   | { type: "openNote"; filename: string }
+  | { type: "openNoteInNewPane"; filename: string }
   | { type: "createNote"; title: string }
   | { type: "togglePin"; filename: string | null }
   | { type: "deleteNote"; filename: string }
@@ -931,6 +932,7 @@ const switcher = mountSwitcher({
   pane: paneEl,
   onQuery: (query) => send({ type: "requestNotes", query }),
   onOpen: (filename) => send({ type: "openNote", filename }),
+  onOpenInNewPane: (filename) => send({ type: "openNoteInNewPane", filename }),
   onCreate: (title) => send({ type: "createNote", title }),
   onPin: (filename) => send({ type: "togglePin", filename }),
   onDelete: (filename) => send({ type: "deleteNote", filename }),

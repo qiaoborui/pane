@@ -72,7 +72,34 @@ final class PaneController: NSObject {
     /// launch (decision 136): a summon is a keypress, so there is somebody at the keyboard.
     var onSummoned: (() -> Void)?
 
-    private var paneID: UUID
+    // MARK: Windows
+
+    /// The pane the hotkey summons. Only the primary parks on dismiss; every other window is one the
+    /// user opened on purpose, so closing it closes it — its state goes with it.
+    let isPrimary: Bool
+
+    /// The notes other windows are showing. One note in two windows is two buffers writing one file,
+    /// so a window never starts on, or switches to, a note another window holds.
+    var notesShownElsewhere: () -> Set<String> = { [] }
+    /// Asked before switching to a note: true when another window already shows it and took the
+    /// focus instead.
+    var onOpenElsewhere: ((String) -> Bool)?
+    /// ⇧⏎ in the switcher, or New Window: a note (or a draft, for nil) in a window of its own.
+    var onOpenInNewPane: ((String?) -> Void)?
+    /// The note a new window opens on, in place of the one it was last showing.
+    var startingNote: String?
+
+    /// The note this window holds or is about to — the loaded one, or, while a launch is still
+    /// loading, the one it is coming back on. Two windows choosing at once must not both pick it.
+    var claimedFilename: String? {
+        currentFilename ?? startingNote ?? (isDraft ? nil : paneState.noteFilename)
+    }
+    /// A non-primary window has closed for good.
+    var onClosed: (() -> Void)?
+    /// This window took the keyboard, which makes it the one the menus act on.
+    var onBecameKey: (() -> Void)?
+
+    private(set) var paneID: UUID
 
     // MARK: Buffer
 
@@ -160,14 +187,33 @@ final class PaneController: NSObject {
     /// two overlays did differently.
     private var switcherPaneHeight: CGFloat = 0
 
-    init(vault: VaultService, state: StateStore, settings: SettingsStore) {
+    /// - Parameter paneID: an existing pane in `state.json` to bring back. Nil for the primary means
+    ///   the first pane on record; nil for any other window means a new one, appended.
+    init(
+        vault: VaultService, state: StateStore, settings: SettingsStore,
+        paneID: UUID? = nil, isPrimary: Bool = true
+    ) {
         self.vault = vault
         self.state = state
         self.settings = settings
+        self.isPrimary = isPrimary
 
         // Reuse the pane the last session left behind, so its remembered frames come back with it.
-        if let existing = state.value.panes.first {
-            paneID = existing.id
+        if let paneID, state.value.panes.contains(where: { $0.id == paneID }) {
+            self.paneID = paneID
+        } else if isPrimary, let existing = state.value.panes.first {
+            self.paneID = existing.id
+        } else if !isPrimary {
+            // A new window takes the primary's habits — auto-sizing and the format bar — but none
+            // of its geometry; `presetFrame` places it.
+            let primary = state.value.panes.first
+            let fresh = PaneState(
+                showsFormatBar: primary?.showsFormatBar ?? false,
+                autoSizing: primary?.autoSizing ?? false,
+                manualHeight: primary?.manualHeight ?? Double(PanePanel.defaultHeight)
+            )
+            self.paneID = fresh.id
+            state.update { $0.panes.append(fresh) }
         } else {
             // **A pane that has never existed starts square, with auto-sizing off** — decision 129.
             //
@@ -189,7 +235,7 @@ final class PaneController: NSObject {
                 autoSizing: false,
                 manualHeight: Double(PanePanel.defaultHeight)
             )
-            paneID = fresh.id
+            self.paneID = fresh.id
             state.update { $0.panes = [fresh] }
         }
 
@@ -284,6 +330,11 @@ final class PaneController: NSObject {
         }
     }
 
+    /// Puts this window in front with the caret in it, from wherever it is.
+    func bringForward() {
+        if isVisible, panel.isOnActiveSpace { refocus() } else { summon() }
+    }
+
     /// The caret back in a pane that is already up, without starting a new sitting: undo history and
     /// the unsettled name (103) carry on, which a dismiss and a summon would both reset.
     private func refocus() {
@@ -366,6 +417,10 @@ final class PaneController: NSObject {
     }
 
     func dismiss() {
+        guard isPrimary else {
+            closeWindow()
+            return
+        }
         flush(trigger: .dismissed)
         // Decision 103's freeze list, first entry. The write above still lands; only the *name*
         // stops following, so a note comes back on the next summon under the name you left it with.
@@ -379,6 +434,32 @@ final class PaneController: NSObject {
         // `frontmostApplication` stays with the other app throughout — so in the common case this is
         // a no-op, and in the case where a click into the pane *did* activate us, it is the fix.
         if NSApp.isActive { NSApp.deactivate() }
+    }
+
+    /// Closes a window that is not the primary: the note is written, the window goes, and so does
+    /// its entry in `state.json` — a closed window is not one to bring back at the next launch.
+    private func closeWindow() {
+        flush(trigger: .dismissed)
+        writeTimer?.cancel()
+        writeTimer = nil
+        stopTrackingResizeEdge()
+        panel.delegate = nil
+        editor.delegate = nil
+        panel.orderOut(nil)
+        panel.close()
+        let id = paneID
+        state.update { $0.panes.removeAll { $0.id == id } }
+        state.save()
+        onClosed?()
+    }
+
+    /// Where a window that has never been on screen first appears, filed as if it had been dragged
+    /// there — so `summon` restores it like any other remembered frame.
+    func presetFrame(_ frame: CGRect, on screen: NSScreen) {
+        var pane = paneState
+        pane.frames[Self.displayKey(screen)] = StoredFrame(frame)
+        pane.lastSize = StoredSize(frame.size)
+        paneState = pane
     }
 
     private func rememberFrame() {
@@ -425,7 +506,18 @@ final class PaneController: NSObject {
     // MARK: - Notes
 
     func openLastUsedNote() {
-        if let last = state.value.lastUsedFilename {
+        let elsewhere = notesShownElsewhere()
+        // A window brought back at launch comes back on its own note, not on the latest one.
+        if !isPrimary {
+            if let own = startingNote ?? paneState.noteFilename, !elsewhere.contains(own) {
+                startingNote = nil
+                open(own)
+            } else {
+                createNote(title: "")
+            }
+            return
+        }
+        if let last = state.value.lastUsedFilename(excluding: elsewhere) {
             open(last)
             return
         }
@@ -433,7 +525,7 @@ final class PaneController: NSObject {
         vault.rows(query: "", state: state.value, current: nil, order: settings.value.noteOrder) {
             [weak self] snapshot in
             guard let self else { return }
-            if let first = snapshot.rows.first {
+            if let first = snapshot.rows.first(where: { !elsewhere.contains($0.filename) }) {
                 self.open(first.filename)
             } else {
                 self.createNote(title: "")
@@ -448,6 +540,9 @@ final class PaneController: NSObject {
             editor.focusEditor()
             return
         }
+        // Every way into a note comes through here — switcher, menu bar, ⌘[ — so this is the one
+        // place that keeps a note to one window.
+        if notesShownElsewhere().contains(filename), onOpenElsewhere?(filename) == true { return }
         flush(trigger: .noteSwitched)
 
         vault.load(filename) { [weak self] result in
@@ -1515,6 +1610,9 @@ extension PaneController: EditorWebViewDelegate {
         case .openNote(let filename):
             open(filename)
 
+        case .openNoteInNewPane(let filename):
+            onOpenInNewPane?(filename)
+
         case .createNote(let title):
             createNote(title: title)
 
@@ -1878,6 +1976,7 @@ extension PaneController: NSWindowDelegate {
     }
 
     func windowDidBecomeKey(_ notification: Notification) {
+        onBecameKey?()
         editor.call("setFocused", [true])
     }
 

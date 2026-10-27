@@ -28,6 +28,8 @@ interface SwitcherOptions {
   pane: HTMLElement;
   onQuery: (query: string) => void;
   onOpen: (filename: string) => void;
+  /** ⇧⏎: the selected note in a window of its own. */
+  onOpenInNewPane: (filename: string) => void;
   onCreate: (title: string) => void;
   onPin: (filename: string) => void;
   onDelete: (filename: string) => void;
@@ -55,6 +57,7 @@ type Mode = "notes" | "deleted";
 
 const PIN_SVG = `<svg width="11" height="11" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="5" r="3.4" fill="currentColor"/><line x1="7" y1="8" x2="7" y2="13.5" stroke="currentColor" stroke-width="1.8"/></svg>`;
 const TRASH_SVG = `<svg width="12" height="12" viewBox="0 0 14 14" aria-hidden="true"><path d="M3 4h8l-.7 8.5H3.7zM2 4h10M5.5 4V2.5h3V4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const NEW_WINDOW_SVG = `<svg width="12" height="12" viewBox="0 0 14 14" aria-hidden="true"><rect x="1.5" y="3.5" width="8" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M5 1.5h6a1.5 1.5 0 0 1 1.5 1.5v6" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>`;
 const PIN_OUTLINE_SVG = `<svg width="12" height="12" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="5" r="3" fill="none" stroke="currentColor" stroke-width="1.5"/><line x1="7" y1="8" x2="7" y2="13" stroke="currentColor" stroke-width="1.5"/></svg>`;
 
 export function mountSwitcher(options: SwitcherOptions) {
@@ -320,6 +323,9 @@ export function mountSwitcher(options: SwitcherOptions) {
                       data-tip="Delete permanently">${TRASH_SVG}</button>
             </span>`
                 : `<span class="switcher__actions">
+              <button class="switcher__action" data-new-window
+                      aria-label="Open in New Window"
+                      data-tip="Open in New Window ⇧⏎">${NEW_WINDOW_SVG}</button>
               <button class="switcher__action" data-pin
                       aria-label="Pin" data-tip="Pin ⌘⏎">${PIN_OUTLINE_SVG}</button>
               <button class="switcher__action" data-delete
@@ -459,6 +465,9 @@ export function mountSwitcher(options: SwitcherOptions) {
         event.preventDefault();
         if (event.metaKey && mode === "notes" && rows.length > 0) {
           options.onPin(rows[selected]!.filename);
+        } else if (event.shiftKey && mode === "notes" && rows.length > 0) {
+          options.onOpenInNewPane(rows[selected]!.filename);
+          close();
         } else {
           activate();
         }
@@ -507,6 +516,9 @@ export function mountSwitcher(options: SwitcherOptions) {
       options.onForgetDeleted(note.filename);
     } else if (mode === "deleted") {
       options.onRestore(note.filename);
+      close();
+    } else if (target.closest("[data-new-window]")) {
+      options.onOpenInNewPane(note.filename);
       close();
     } else if (target.closest("[data-pin]")) {
       options.onPin(note.filename);

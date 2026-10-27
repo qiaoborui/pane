@@ -179,6 +179,15 @@ func runStateTests() {
             Check.equal(s.lastUsedFilename, "b.md")
         }
 
+        Check.test("a second window skips the note another window is showing") {
+            var s = AppState()
+            s.recordOpen("a.md", at: at("2026-08-14T10:00:00Z"))
+            s.recordOpen("b.md", at: at("2026-08-14T12:00:00Z"))
+            s.recordOpen("c.md", at: at("2026-08-14T11:00:00Z"))
+            Check.equal(s.lastUsedFilename(excluding: ["b.md"]), "c.md")
+            Check.expect(s.lastUsedFilename(excluding: ["a.md", "b.md", "c.md"]) == nil)
+        }
+
         Check.test("an untouched vault has no last-used note")  {
             Check.expect(AppState().lastUsedFilename == nil)
         }
