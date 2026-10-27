@@ -110,3 +110,17 @@ export function pointerMotion(): { moved(event: MouseEvent): boolean; reset(): v
     },
   };
 }
+
+/**
+ * The key a list moves by: ⌃N and ⌃P read as ↓ and ↑, as they do in every Cocoa list and in Emacs.
+ * The search field is one line, so the caret movement those keys would otherwise make there is
+ * nothing anyone wants.
+ */
+export function listKey(event: KeyboardEvent): string {
+  if (event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
+    const key = event.key.toLowerCase();
+    if (key === "n") return "ArrowDown";
+    if (key === "p") return "ArrowUp";
+  }
+  return event.key;
+}

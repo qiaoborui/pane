@@ -19,7 +19,7 @@
  */
 
 import { icon } from "./format-bar";
-import { desiredOverlayHeight, pointerMotion } from "./overlay";
+import { desiredOverlayHeight, listKey, pointerMotion } from "./overlay";
 import { composing } from "./ime";
 
 export interface ActionRow {
@@ -327,7 +327,7 @@ export function mountActionPanel(options: ActionPanelOptions) {
   search.addEventListener("keydown", (event) => {
     // An input method's ⏎ and Esc are its own (204).
     if (composing(event)) return;
-    switch (event.key) {
+    switch (listKey(event)) {
       case "ArrowDown":
         event.preventDefault();
         move(1);

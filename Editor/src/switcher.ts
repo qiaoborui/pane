@@ -6,7 +6,7 @@
  * recency bands, the relative-time format) live in Swift where they are unit-tested.
  */
 
-import { desiredOverlayHeight, pointerMotion } from "./overlay";
+import { desiredOverlayHeight, listKey, pointerMotion } from "./overlay";
 import { composing } from "./ime";
 
 export interface NoteSummary {
@@ -452,7 +452,7 @@ export function mountSwitcher(options: SwitcherOptions) {
       options.onDelete(rows[selected]!.filename);
       return;
     }
-    switch (event.key) {
+    switch (listKey(event)) {
       case "ArrowDown":
         event.preventDefault();
         move(1);

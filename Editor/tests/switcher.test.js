@@ -187,6 +187,22 @@ export function run(view, bar, doc) {
     );
   }
 
+  // ---- ⌃N and ⌃P move like ↓ and ↑ ----------------------------------------------------------------
+  openWith(30);
+  {
+    const ctrl = (key) =>
+      search.dispatchEvent(
+        new KeyboardEvent("keydown", { key, ctrlKey: true, bubbles: true, cancelable: true }));
+    const selectedIndex = () => Number(list.querySelector('[aria-selected="true"]').dataset.index);
+    const start = selectedIndex();
+    ctrl("n");
+    ctrl("n");
+    const down = selectedIndex() - start;
+    ctrl("p");
+    const up = selectedIndex() - start;
+    check("⌃N moves down and ⌃P moves up", "+2 then +1", `+${down} then +${up}`, down === 2 && up === 1);
+  }
+
   // ---- The arrow keys stop at the ends -----------------------------------------------------------
   //
   // Measured against Raycast Notes, the reference this panel is built to: ArrowDown on its last row
